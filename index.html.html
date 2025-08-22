@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Marx Mats Online</title>
+  <style>
+    body { background: #111; margin: 0; overflow: hidden; text-align: center; }
+    canvas { display: block; margin: auto; background: #222; }
+    #startScreen, #winScreen {
+      position: absolute; top:0; left:0; right:0; bottom:0;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: Arial, sans-serif;
+      font-size: 24px;
+    }
+    #restartBtn {
+      position: absolute; top:10px; left:50%; transform: translateX(-50%);
+      padding: 8px 16px; font-size: 16px; cursor: pointer;
+      border-radius: 5px; border: none; background: #444; color: white;
+    }
+  </style>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+<button id="restartBtn">Restart</button>
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+<div id="startScreen">
+  <h1>Marx Mats Online</h1>
+  <p>Waiting for 2 players...</p>
+</div>
+<div id="winScreen" style="display:none;"></div>
+
+<script>
+/* ------------------- Firebase Setup ------------------- */
+const firebaseConfig = {
+  apiKey: "1974",
+  authDomain: "marxmats-d0183.firebaseapp.com",
+  databaseURL: "https://marxmats-d0183-default-rtdb.firebaseio.com",
+  projectId: "marxmats-d0183",
+  storageBucket: "marxmats-d0183.appspot.com",
+  messagingSenderId: "1974",
+  appId: "1:1974:web:EXAMPLE" // replace with your appId
+};
+firebase.initializeApp(firebaseConfig);
+const database = firebase.database();
+
+/* ------------------- Game Setup ------------------- */
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const restartBtn = document.getElementById("restartBtn");
+const startScreen = document.getElementById("startScreen");
+const winScreen = document.getElementById("winScreen");
+
+const playerId = Date.now() + "-" + Math.floor(Math.random()*1000);
+let localPlayer = null;
+let players = {};
+let bullets = [];
+let gameRunning = false;
+
+/* ------------------- Firebase Sync ------------------- */
+function updateFirebase() {
+  if (!localPlayer) return;
+  database.ref('players/' + playerId).set(localPlayer);
+}
+setInterval(updateFirebase, 50);
+
+database.ref('players').on('value', snapshot => {
+  players = snapshot.val() || {};
+  if (Object.keys(players).length >= 2 && !gameRunning) {
+    gameRunning = true;
+    startScreen.style.display = 'none';
+  }
+});
+
+function updateBulletsFirebase() {
+  database.ref('bullets').set(bullets);
+}
+database.ref('bullets').on('value', snapshot => {
+  bullets = snapshot.val() || [];
+});
+
+window.addEventListener('beforeunload', () => {
+  database.ref('players/' + playerId).remove();
+});
+
+/* ------------------- Game Functions ------------------- */
+function drawPlayer(p) { ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y-20, 20, 40); }
+function drawBullets() { ctx.fillStyle='white'; bullets.forEach(b=>ctx.fillRect(b.x,b.y,5,5)); }
+function drawWalls(p) { ctx.fillStyle='gray'; p.walls.forEach(w=>ctx.fillRect(w.x,w.y-25,10,50)); }
+function drawUI() {
+  Object.values(players).forEach((p,i)=>{
+    ctx.fillStyle='white'; ctx.font='16px Arial';
+    ctx.fillText(`${p.color.toUpperCase()} HP: ${p.health} | Mats: ${p.mats} | Ammo: ${p.ammo}/10${p.reloading?' (Reloading)':''}`, 20 + i*400, 20);
+  });
+}
+
+function update() {
+  Object.values(players).forEach(p=>{
+    p.y = Math.max(25, Math.min(canvas.height-25, p.y));
+    p.y += p.dy || 0;
+  });
+
+  bullets.forEach((b,i)=>{
+    b.x += b.vx;
+    Object.values(players).forEach(p=>{
+      p.walls.forEach((w,wi)=>{
+        if(b.x>w.x && b.x<w.x+10 && Math.abs(b.y-w.y)<25){ w.health--; bullets.splice(i,1); if(w.health<=0)p.walls.splice(wi,1); }
+      });
+    });
+    if(b.x<0||b.x>canvas.width) bullets.splice(i,1);
+  });
+
+  Object.values(players).forEach(p=>{
+    if(p.health<=0){
+      gameRunning=false;
+      winScreen.style.display='flex';
+      winScreen.innerHTML=`<h1>${p.color==='red'?'Blue':'Red'} Wins!</h1>`;
+      setTimeout(()=>{winScreen.style.display='none'; startScreen.style.display='flex';},2000);
+    }
+  });
+}
+
+function render() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(gameRunning){
+    Object.values(players).forEach(p=>{ drawPlayer(p); drawWalls(p); });
+    drawBullets(); drawUI();
+  }
+}
+
+function gameLoop(){ update(); render(); requestAnimationFrame(gameLoop); }
+requestAnimationFrame(gameLoop);
+
+/* ------------------- Local Player Actions ------------------- */
+function createLocalPlayer() {
+  const color = Object.keys(players).length % 2 === 0 ? 'red' : 'blue';
+  localPlayer = { id: playerId, x: color==='red'?50:730, y:200, color, health:20, mats:0, ammo:10, reloading:false, dy:0, walls:[] };
+  database.ref('players/' + playerId).set(localPlayer);
+}
+createLocalPlayer();
+
+window.addEventListener('keydown', e=>{
+  if(!localPlayer || !gameRunning) return;
+  if(e.key==='w' || e.key==='ArrowUp') localPlayer.dy=-3;
+  if(e.key==='s' || e.key==='ArrowDown') localPlayer.dy=3;
+  if(e.key==='e' && localPlayer.color==='red') shoot(localPlayer,5);
+  if(e.key==='ArrowLeft' && localPlayer.color==='blue') shoot(localPlayer,-5);
+  if(e.key==='d' && localPlayer.color==='red' && localPlayer.mats>=10){ localPlayer.mats-=10; localPlayer.walls.push({x:localPlayer.x+35,y:localPlayer.y,health:2}); }
+  if(e.key==='ArrowRight' && localPlayer.color==='blue' && localPlayer.mats>=10){ localPlayer.mats-=10; localPlayer.walls.push({x:localPlayer.x-25,y:localPlayer.y,health:2}); }
+});
+window.addEventListener('keyup',e=>{ if(localPlayer){ if(['w','s','ArrowUp','ArrowDown'].includes(e.key)) localPlayer.dy=0; } });
+
+function shoot(player,vx){ if(player.reloading||player.ammo<=0) return; bullets.push({x:player.x+((player.color==='red')?20:0),y:player.y,vx:vx}); player.ammo--; updateBulletsFirebase(); if(player.ammo===0) reload(player); }
+function reload(player){ player.reloading=true; setTimeout(()=>{player.ammo=10; player.reloading=false;},1000); }
+
+/* ------------------- Restart Button ------------------- */
+restartBtn.onclick=()=>{ 
+  if(localPlayer){
+    localPlayer.health=20; localPlayer.mats=0; localPlayer.walls=[]; localPlayer.ammo=10; localPlayer.reloading=false;
+    database.ref('players/' + playerId).set(localPlayer);
+  }
+};
+</script>
+</body>
+</html>
